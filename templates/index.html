@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polymarket Trading Bot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #0a0e1a; font-family: 'Segoe UI', sans-serif; }
+        .glass { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); backdrop-filter: blur(10px); }
+        .glass-bright { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); }
+        .neon-green { color: #00ff88; text-shadow: 0 0 10px rgba(0,255,136,0.3); }
+        .neon-red { color: #ff4466; text-shadow: 0 0 10px rgba(255,68,102,0.3); }
+        .neon-blue { color: #4488ff; text-shadow: 0 0 10px rgba(68,136,255,0.3); }
+        .neon-yellow { color: #ffcc00; text-shadow: 0 0 10px rgba(255,204,0,0.3); }
+        .btn-start { background: linear-gradient(135deg, #00ff88, #00cc6a); color: #000; font-weight: 700; }
+        .btn-start:hover { background: linear-gradient(135deg, #00ff99, #00dd77); box-shadow: 0 0 20px rgba(0,255,136,0.4); }
+        .btn-stop { background: linear-gradient(135deg, #ff4466, #cc2244); color: #fff; font-weight: 700; }
+        .btn-stop:hover { background: linear-gradient(135deg, #ff5577, #dd3355); box-shadow: 0 0 20px rgba(255,68,102,0.4); }
+        .pulse-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .pulse-dot.active { background: #00ff88; animation: pulse 1.5s infinite; }
+        .pulse-dot.inactive { background: #555; }
+        @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(0,255,136,0.5); } 50% { box-shadow: 0 0 0 8px rgba(0,255,136,0); } }
+        .log-box { max-height: 300px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #333 transparent; }
+        .log-box::-webkit-scrollbar { width: 6px; }
+        .log-box::-webkit-scrollbar-track { background: transparent; }
+        .log-box::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+        .toggle-container { position: relative; width: 200px; height: 44px; background: rgba(255,255,255,0.05); border-radius: 22px; border: 1px solid rgba(255,255,255,0.15); cursor: pointer; display: flex; overflow: hidden; }
+        .toggle-option { flex: 1; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; z-index: 1; transition: color 0.3s; user-select: none; }
+        .toggle-option.active { color: #fff; }
+        .toggle-option:not(.active) { color: #666; }
+        .toggle-slider { position: absolute; top: 3px; height: calc(100% - 6px); width: calc(50% - 3px); border-radius: 19px; transition: left 0.3s ease; }
+        .toggle-slider.yes { left: 3px; background: linear-gradient(135deg, #4488ff, #2266dd); }
+        .toggle-slider.no { left: calc(50%); background: linear-gradient(135deg, #ff4466, #cc2244); }
+        input[type="number"], input[type="text"], select { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); color: #fff; border-radius: 8px; padding: 10px 14px; outline: none; transition: border-color 0.3s; }
+        input[type="number"]:focus, select:focus { border-color: #4488ff; }
+        select { cursor: pointer; -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23888' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; }
+        select option { background: #1a1f2e; color: #fff; }
+        .stat-card { text-align: center; }
+        .tab-btn { padding: 8px 20px; border-radius: 8px; cursor: pointer; transition: all 0.3s; font-weight: 600; font-size: 13px; }
+        .tab-btn.active { background: rgba(68,136,255,0.2); color: #4488ff; border: 1px solid rgba(68,136,255,0.3); }
+        .tab-btn:not(.active) { background: transparent; color: #666; border: 1px solid transparent; }
+        .tab-btn:hover:not(.active) { color: #aaa; }
+        .cat-chip { padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); color: #888; transition: all 0.2s; }
+        .cat-chip:hover { border-color: rgba(255,255,255,0.25); color: #bbb; }
+        .cat-chip.active { border-color: rgba(0,255,136,0.5); background: rgba(0,255,136,0.1); color: #00ff88; }
+        .sub-chip { padding: 4px 12px; border-radius: 16px; font-size: 11px; font-weight: 600; cursor: pointer; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.02); color: #666; transition: all 0.2s; }
+        .sub-chip:hover { border-color: rgba(255,255,255,0.2); color: #aaa; }
+        .sub-chip.active { border-color: rgba(68,136,255,0.5); background: rgba(68,136,255,0.1); color: #4488ff; }
+    </style>
+</head>
+<body class="min-h-screen text-gray-300">
+    <div class="max-w-5xl mx-auto px-4 py-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8">
+            <div>
+                <h1 class="text-2xl font-bold text-white">Polymarket <span class="neon-green">Bot</span></h1>
+                <p class="text-xs text-gray-500 mt-1">Auto Trading System</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <span class="pulse-dot inactive" id="statusDot"></span>
+                <span class="text-sm" id="statusText">Offline</span>
+            </div>
+        </div>
+
+        <!-- Control Panel -->
+        <div class="glass rounded-2xl p-6 mb-6">
+            <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-5">Control Panel</h2>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-5">
+                <!-- Target Price -->
+                <div>
+                    <label class="block text-xs text-gray-500 mb-2">Min Price (cents)</label>
+                    <input type="number" id="targetPrice" min="1" max="99" value="97"
+                        class="w-full text-lg font-bold" onchange="saveConfig()">
+                    <p class="text-xs text-gray-600 mt-1">Trade when price >= this</p>
+                </div>
+
+                <!-- Max Price -->
+                <div>
+                    <label class="block text-xs text-gray-500 mb-2">Max Price (cents)</label>
+                    <input type="number" id="maxPrice" min="1" max="100" value="98"
+                        class="w-full text-lg font-bold" onchange="saveConfig()">
+                    <p class="text-xs text-gray-600 mt-1">Trade when price < this</p>
+                </div>
+
+                <!-- Trade Side Toggle -->
+                <div>
+                    <label class="block text-xs text-gray-500 mb-2">Trade Side</label>
+                    <div class="toggle-container" id="sideToggle" onclick="toggleSide()">
+                        <div class="toggle-slider no" id="toggleSlider"></div>
+                        <div class="toggle-option" id="toggleYes" data-side="YES">YES</div>
+                        <div class="toggle-option active" id="toggleNo" data-side="NO">NO</div>
+                    </div>
+                </div>
+
+                <!-- Trade Amount -->
+                <div>
+                    <label class="block text-xs text-gray-500 mb-2">Amount (USDT)</label>
+                    <input type="number" id="tradeAmount" min="0.5" step="0.5" value="5.0"
+                        class="w-full text-lg font-bold" onchange="saveConfig()">
+                    <p class="text-xs text-gray-600 mt-1">Per trade fixed amount</p>
+                </div>
+
+                <!-- Scan Interval -->
+                <div>
+                    <label class="block text-xs text-gray-500 mb-2">Scan Interval (sec)</label>
+                    <input type="number" id="scanInterval" min="10" step="10" value="60"
+                        class="w-full text-lg font-bold" onchange="saveConfig()">
+                    <p class="text-xs text-gray-600 mt-1">How often to scan</p>
+                </div>
+            </div>
+
+            <!-- Mode Toggle -->
+            <div class="mt-6 flex items-center gap-4">
+                <label class="text-xs text-gray-500">Mode:</label>
+                <div class="flex gap-2">
+                    <button id="btnDryRun" onclick="setMode(true)"
+                        class="px-5 py-2 rounded-lg text-xs font-bold transition-all border border-yellow-500/50 bg-yellow-500/10 text-yellow-400">
+                        DRY RUN (Safe)
+                    </button>
+                    <button id="btnLive" onclick="setMode(false)"
+                        class="px-5 py-2 rounded-lg text-xs font-bold transition-all border border-gray-700 bg-transparent text-gray-600">
+                        LIVE TRADING
+                    </button>
+                </div>
+                <span class="text-xs ml-2" id="modeLabel">No real trades will be placed</span>
+            </div>
+
+            <!-- Category Selection -->
+            <div class="mt-6">
+                <label class="block text-xs text-gray-500 mb-3">Category</label>
+                <div class="flex flex-wrap gap-2" id="categoryChips"></div>
+            </div>
+
+            <!-- Weather Subcategory (shown only when Weather selected) -->
+            <div class="mt-4 hidden" id="weatherSubSection">
+                <label class="block text-xs text-gray-500 mb-3">Weather Subcategory</label>
+                <div class="flex flex-wrap gap-2" id="weatherSubChips"></div>
+            </div>
+
+            <!-- Date Filter (shown only for Weather) -->
+            <div class="mt-4 hidden" id="dateSection">
+                <label class="block text-xs text-gray-500 mb-3">Date Filter</label>
+                <div class="flex flex-wrap items-center gap-3">
+                    <div class="flex gap-2" id="dateQuickBtns">
+                        <button onclick="setDate('all')" class="date-btn sub-chip" id="dateAll">All Dates</button>
+                        <button onclick="setQuickDate(0)" class="date-btn sub-chip" id="dateToday">Today</button>
+                        <button onclick="setQuickDate(1)" class="date-btn sub-chip" id="dateTomorrow">Tomorrow</button>
+                        <button onclick="setQuickDate(2)" class="date-btn sub-chip" id="dateDayAfter">Day After</button>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-600">or pick:</span>
+                        <input type="date" id="datePicker" onchange="setDate(this.value)"
+                            class="text-xs py-1.5 px-3 rounded-lg" style="color-scheme:dark">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Start / Stop Buttons -->
+            <div class="flex gap-4 mt-6">
+                <button id="btnStart" onclick="startBot()"
+                    class="btn-start px-8 py-3 rounded-xl text-sm transition-all">
+                    &#9654; START BOT
+                </button>
+                <button id="btnStop" onclick="stopBot()" disabled
+                    class="btn-stop px-8 py-3 rounded-xl text-sm transition-all opacity-50 cursor-not-allowed">
+                    &#9632; STOP BOT
+                </button>
+                <button onclick="saveConfig()"
+                    class="glass-bright px-6 py-3 rounded-xl text-sm text-gray-400 hover:text-white transition-all">
+                    SAVE SETTINGS
+                </button>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div class="glass rounded-xl p-4 stat-card">
+                <div class="text-xs text-gray-500 mb-1">Bot Status</div>
+                <div class="text-lg font-bold" id="statStatus">Stopped</div>
+            </div>
+            <div class="glass rounded-xl p-4 stat-card">
+                <div class="text-xs text-gray-500 mb-1">Last Scan</div>
+                <div class="text-lg font-bold" id="statLastScan">-</div>
+            </div>
+            <div class="glass rounded-xl p-4 stat-card">
+                <div class="text-xs text-gray-500 mb-1">Markets Scanned</div>
+                <div class="text-lg font-bold neon-blue" id="statScanned">0</div>
+            </div>
+            <div class="glass rounded-xl p-4 stat-card">
+                <div class="text-xs text-gray-500 mb-1">Trades Placed</div>
+                <div class="text-lg font-bold neon-green" id="statTrades">0</div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="flex gap-2 mb-4">
+            <button class="tab-btn active" onclick="switchTab('logs', this)">Live Logs</button>
+            <button class="tab-btn" onclick="switchTab('trades', this)">Trade History</button>
+        </div>
+
+        <!-- Logs Panel -->
+        <div id="logsPanel" class="glass rounded-2xl p-5">
+            <div class="log-box font-mono text-xs leading-relaxed" id="logContainer">
+                <div class="text-gray-600 py-8 text-center">Waiting for bot to start...</div>
+            </div>
+        </div>
+
+        <!-- Trades Panel -->
+        <div id="tradesPanel" class="glass rounded-2xl p-5 hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-xs">
+                    <thead>
+                        <tr class="text-gray-500 border-b border-gray-800">
+                            <th class="text-left py-2 px-3">Time</th>
+                            <th class="text-left py-2 px-3">Market</th>
+                            <th class="text-left py-2 px-3">Side</th>
+                            <th class="text-right py-2 px-3">Price</th>
+                            <th class="text-right py-2 px-3">Size</th>
+                            <th class="text-right py-2 px-3">Cost</th>
+                            <th class="text-left py-2 px-3">Status</th>
+                            <th class="text-left py-2 px-3">Result</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tradesBody">
+                        <tr><td colspan="8" class="text-center text-gray-600 py-8">No trades yet</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSide = 'NO';
+        let botRunning = false;
+        let currentCategory = 'Weather';
+        let currentWeatherSub = 'Daily Temperature';
+        let isDryRun = true;
+        let targetDate = 'all';
+
+        function setDate(d) {
+            targetDate = d;
+            document.querySelectorAll('.date-btn').forEach(b => b.classList.remove('active'));
+            if (d === 'all') document.getElementById('dateAll').classList.add('active');
+            else {
+                const today = new Date();
+                const td = today.toISOString().split('T')[0];
+                const tm = new Date(today); tm.setDate(tm.getDate()+1); const tmd = tm.toISOString().split('T')[0];
+                const da = new Date(today); da.setDate(da.getDate()+2); const dad = da.toISOString().split('T')[0];
+                if (d === td) document.getElementById('dateToday').classList.add('active');
+                else if (d === tmd) document.getElementById('dateTomorrow').classList.add('active');
+                else if (d === dad) document.getElementById('dateDayAfter').classList.add('active');
+                document.getElementById('datePicker').value = d;
+            }
+            saveConfig();
+        }
+
+        function setQuickDate(offset) {
+            const d = new Date();
+            d.setDate(d.getDate() + offset);
+            setDate(d.toISOString().split('T')[0]);
+        }
+
+        function setMode(dry) {
+            isDryRun = dry;
+            const btnDry = document.getElementById('btnDryRun');
+            const btnLive = document.getElementById('btnLive');
+            const label = document.getElementById('modeLabel');
+            if (dry) {
+                btnDry.className = 'px-5 py-2 rounded-lg text-xs font-bold transition-all border border-yellow-500/50 bg-yellow-500/10 text-yellow-400';
+                btnLive.className = 'px-5 py-2 rounded-lg text-xs font-bold transition-all border border-gray-700 bg-transparent text-gray-600';
+                label.textContent = 'No real trades will be placed';
+                label.className = 'text-xs ml-2 text-yellow-400';
+            } else {
+                btnDry.className = 'px-5 py-2 rounded-lg text-xs font-bold transition-all border border-gray-700 bg-transparent text-gray-600';
+                btnLive.className = 'px-5 py-2 rounded-lg text-xs font-bold transition-all border border-green-500/50 bg-green-500/10 text-green-400';
+                label.textContent = 'REAL trades will be placed!';
+                label.className = 'text-xs ml-2 text-green-400 font-bold';
+            }
+            saveConfig();
+        }
+
+        const categories = ['All', 'Weather', 'Sports', 'Politics', 'Crypto', 'Finance', 'Tech', 'AI', 'Elections', 'Geopolitics', 'Business', 'Culture'];
+        const weatherSubs = ['All Weather', 'Daily Temperature', 'Precipitation', 'Earthquakes', 'Hurricanes', 'Tornadoes', 'Volcanoes', 'Pandemics', 'Global'];
+
+        function getTodayStr() { return new Date().toISOString().split('T')[0]; }
+
+        function renderCategoryChips() {
+            const container = document.getElementById('categoryChips');
+            container.innerHTML = categories.map(c =>
+                `<div class="cat-chip ${c === currentCategory ? 'active' : ''}" onclick="selectCategory('${c}')">${c}</div>`
+            ).join('');
+            document.getElementById('weatherSubSection').classList.toggle('hidden', currentCategory !== 'Weather');
+            document.getElementById('dateSection').classList.toggle('hidden', currentCategory !== 'Weather');
+        }
+
+        function renderWeatherSubChips() {
+            const container = document.getElementById('weatherSubChips');
+            container.innerHTML = weatherSubs.map(s =>
+                `<div class="sub-chip ${s === currentWeatherSub ? 'active' : ''}" onclick="selectWeatherSub('${s}')">${s}</div>`
+            ).join('');
+        }
+
+        function selectCategory(cat) {
+            currentCategory = cat;
+            renderCategoryChips();
+            if (cat === 'Weather') renderWeatherSubChips();
+            saveConfig();
+        }
+
+        function selectWeatherSub(sub) {
+            currentWeatherSub = sub;
+            renderWeatherSubChips();
+            saveConfig();
+        }
+
+        function toggleSide() {
+            currentSide = currentSide === 'YES' ? 'NO' : 'YES';
+            updateToggleUI();
+            saveConfig();
+        }
+
+        function updateToggleUI() {
+            const slider = document.getElementById('toggleSlider');
+            const yesOpt = document.getElementById('toggleYes');
+            const noOpt = document.getElementById('toggleNo');
+            if (currentSide === 'YES') {
+                slider.className = 'toggle-slider yes';
+                yesOpt.classList.add('active');
+                noOpt.classList.remove('active');
+            } else {
+                slider.className = 'toggle-slider no';
+                yesOpt.classList.remove('active');
+                noOpt.classList.add('active');
+            }
+        }
+
+        async function saveConfig() {
+            const cfg = {
+                target_price_cents: parseInt(document.getElementById('targetPrice').value),
+                max_price_cents: parseInt(document.getElementById('maxPrice').value),
+                trade_side: currentSide,
+                trade_amount_usdt: parseFloat(document.getElementById('tradeAmount').value),
+                scan_interval_seconds: parseInt(document.getElementById('scanInterval').value),
+                selected_category: currentCategory,
+                weather_subcategory: currentWeatherSub,
+                dry_run: isDryRun,
+                target_date: targetDate,
+            };
+            await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(cfg),
+            });
+        }
+
+        async function loadConfig() {
+            const resp = await fetch('/api/config');
+            const cfg = await resp.json();
+            document.getElementById('targetPrice').value = cfg.target_price_cents || 97;
+            document.getElementById('maxPrice').value = cfg.max_price_cents || 98;
+            document.getElementById('tradeAmount').value = cfg.trade_amount_usdt || 5.0;
+            document.getElementById('scanInterval').value = cfg.scan_interval_seconds || 60;
+            currentSide = cfg.trade_side || 'NO';
+            currentCategory = cfg.selected_category || 'Weather';
+            currentWeatherSub = cfg.weather_subcategory || 'Daily Temperature';
+            isDryRun = cfg.dry_run !== undefined ? cfg.dry_run : true;
+            targetDate = cfg.target_date || 'all';
+            updateToggleUI();
+            renderCategoryChips();
+            if (currentCategory === 'Weather') {
+                renderWeatherSubChips();
+                setDate(targetDate);
+            }
+            setMode(isDryRun);
+        }
+
+        async function startBot() {
+            await saveConfig();
+            const resp = await fetch('/api/start', { method: 'POST' });
+            const data = await resp.json();
+            botRunning = data.running;
+            updateBotUI();
+        }
+
+        async function stopBot() {
+            const resp = await fetch('/api/stop', { method: 'POST' });
+            const data = await resp.json();
+            botRunning = data.running;
+            updateBotUI();
+        }
+
+        function updateBotUI() {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            const btnStart = document.getElementById('btnStart');
+            const btnStop = document.getElementById('btnStop');
+            const statStatus = document.getElementById('statStatus');
+
+            if (botRunning) {
+                dot.className = 'pulse-dot active';
+                text.textContent = 'Running';
+                text.className = 'text-sm neon-green';
+                btnStart.disabled = true;
+                btnStart.classList.add('opacity-50', 'cursor-not-allowed');
+                btnStop.disabled = false;
+                btnStop.classList.remove('opacity-50', 'cursor-not-allowed');
+                statStatus.textContent = 'Running';
+                statStatus.className = 'text-lg font-bold neon-green';
+            } else {
+                dot.className = 'pulse-dot inactive';
+                text.textContent = 'Offline';
+                text.className = 'text-sm text-gray-500';
+                btnStart.disabled = false;
+                btnStart.classList.remove('opacity-50', 'cursor-not-allowed');
+                btnStop.disabled = true;
+                btnStop.classList.add('opacity-50', 'cursor-not-allowed');
+                statStatus.textContent = 'Stopped';
+                statStatus.className = 'text-lg font-bold text-gray-500';
+            }
+        }
+
+        async function refreshStatus() {
+            try {
+                const resp = await fetch('/api/status');
+                const data = await resp.json();
+                botRunning = data.running;
+                updateBotUI();
+                if (data.last_scan_time) {
+                    document.getElementById('statLastScan').textContent = data.last_scan_time;
+                }
+                document.getElementById('statScanned').textContent = data.last_scan_count || 0;
+                document.getElementById('statTrades').textContent = data.last_trade_count || 0;
+            } catch (e) {}
+        }
+
+        async function refreshLogs() {
+            try {
+                const resp = await fetch('/api/logs?count=50');
+                const logs = await resp.json();
+                const container = document.getElementById('logContainer');
+                if (logs.length === 0) {
+                    container.innerHTML = '<div class="text-gray-600 py-8 text-center">Waiting for bot to start...</div>';
+                    return;
+                }
+                container.innerHTML = logs.map(l => {
+                    let color = 'text-gray-400';
+                    if (l.level === 'ERROR') color = 'neon-red';
+                    else if (l.level === 'TRADE') color = 'neon-green';
+                    else if (l.level === 'MATCH') color = 'neon-yellow';
+                    else if (l.level === 'WARN') color = 'neon-yellow';
+                    else if (l.level === 'DRYRUN') color = 'neon-yellow';
+                    else if (l.level === 'SCAN') color = 'text-gray-500';
+                    return `<div class="flex gap-3 py-0.5"><span class="text-gray-600 shrink-0">${l.time}</span><span class="${color} shrink-0 w-14">[${l.level}]</span><span class="text-gray-300">${l.message}</span></div>`;
+                }).join('');
+            } catch (e) {}
+        }
+
+        async function refreshTrades() {
+            try {
+                const resp = await fetch('/api/trades/resolve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ count: 50 }),
+                });
+                const trades = await resp.json();
+                const tbody = document.getElementById('tradesBody');
+                if (trades.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-gray-600 py-8">No trades yet</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = trades.map(t => {
+                    const sideColor = t.side === 'YES' ? 'neon-blue' : 'neon-red';
+                    const time = t.timestamp ? t.timestamp.substring(11, 19) : '-';
+                    let resColor = 'text-gray-600', resLabel = t.resolution || 'PENDING';
+                    if (t.resolution === 'WIN') { resColor = 'neon-green'; resLabel = 'WIN'; }
+                    else if (t.resolution === 'LOSS') { resColor = 'neon-red'; resLabel = 'LOSS'; }
+                    else { resLabel = 'PENDING'; }
+                    return `<tr class="border-b border-gray-800/50 hover:bg-white/[0.02]">
+                        <td class="py-2 px-3 text-gray-500">${time}</td>
+                        <td class="py-2 px-3 text-gray-300 max-w-[200px] truncate" title="${t.question}">${(t.question || '-').substring(0, 40)}...</td>
+                        <td class="py-2 px-3 ${sideColor} font-bold">${t.side}</td>
+                        <td class="py-2 px-3 text-right">$${(t.price || 0).toFixed(2)}</td>
+                        <td class="py-2 px-3 text-right">${(t.size || 0).toFixed(2)}</td>
+                        <td class="py-2 px-3 text-right">$${(t.cost_usdt || 0).toFixed(2)}</td>
+                        <td class="py-2 px-3 text-gray-500">${t.status || t.order_id || '-'}</td>
+                        <td class="py-2 px-3 font-bold ${resColor}">${resLabel}</td>
+                    </tr>`;
+                }).join('');
+            } catch (e) {}
+        }
+
+        function switchTab(tab, el) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            el.classList.add('active');
+            document.getElementById('logsPanel').classList.toggle('hidden', tab !== 'logs');
+            document.getElementById('tradesPanel').classList.toggle('hidden', tab !== 'trades');
+            if (tab === 'trades') refreshTrades();
+        }
+
+        renderCategoryChips();
+        renderWeatherSubChips();
+        setMode(true);
+        setDate('all');
+
+        loadConfig().catch(e => console.log('Config load error:', e));
+
+        setInterval(() => {
+            refreshStatus();
+            refreshLogs();
+        }, 2000);
+
+        setInterval(() => {
+            refreshTrades();
+        }, 5000);
+    </script>
+</body>
+</html>

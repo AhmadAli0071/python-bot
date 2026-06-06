@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: polymarket-bot
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: PRIVATE_KEY
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: API_SECRET
+        sync: false
+      - key: API_PASSPHRASE
+        sync: false
+      - key: WALLET_ADDRESS
+        sync: false
+      - key: CHAIN_ID
+        value: "137"
+    healthCheckPath: /
+    autoDeploy: true
