@@ -186,6 +186,12 @@ class TradingBot:
         except Exception:
             return date_str
 
+    def _extract_event_date(self, question):
+        m = re.search(r'on\s+(\w+\s+\d+)', question)
+        if m:
+            return m.group(1)
+        return None
+
     def _place_trade(self, client, market, token_id, trade_price, side, amount_usdt, dry_run=True):
         try:
             question = market.get("question", "Unknown")
@@ -196,6 +202,7 @@ class TradingBot:
                 return False
 
             size = amount_usdt / trade_price
+            event_date = self._extract_event_date(question)
 
             if dry_run:
                 self.log(
@@ -215,6 +222,7 @@ class TradingBot:
                         "cost_usdt": amount_usdt,
                         "order_id": "DRY_RUN",
                         "status": "SIMULATED",
+                        "resolves_at": event_date,
                         "timestamp": datetime.now().isoformat(),
                     }
                 )
@@ -262,6 +270,7 @@ class TradingBot:
                     "cost_usdt": amount_usdt,
                     "order_id": order_id,
                     "status": status,
+                    "resolves_at": event_date,
                     "timestamp": datetime.now().isoformat(),
                 }
             )
