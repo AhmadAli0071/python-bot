@@ -341,8 +341,9 @@ class TradingBot:
                     self.log(f"Skipping (price >= {max_cents}¢): {question_short}", "SCAN")
                     continue
 
-                m = re.match(r'^(.+?)\s+\d+°[CF]\s+(on\s+.+)$', question)
-                base_key = m.group(1) + " " + m.group(2) if m else question
+                base_key = re.sub(r'\s+between\s+\d+[-–]?\d*°[CF]', '', question)
+                base_key = re.sub(r'\s+\d+[-–]?\d*°[CF]', '', base_key)
+                base_key = re.sub(r'\s+', ' ', base_key).strip()
 
                 if base_key in base_traded:
                     self.log(f"Skipping (same city/date already traded): {question_short}", "SCAN")
