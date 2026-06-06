@@ -76,16 +76,17 @@ class TradingBot:
             return self._clob_client
         try:
             from py_clob_client_v2 import ClobClient
+            from py_clob_client_v2.clob_types import ApiCreds
 
             self._clob_client = ClobClient(
                 CLOB_HOST,
                 key=PRIVATE_KEY,
                 chain_id=CHAIN_ID,
-                creds={
-                    "api_key": API_KEY,
-                    "api_secret": API_SECRET,
-                    "api_passphrase": API_PASSPHRASE,
-                },
+                creds=ApiCreds(
+                    api_key=API_KEY,
+                    api_secret=API_SECRET,
+                    api_passphrase=API_PASSPHRASE,
+                ),
                 signature_type=3,
             )
             return self._clob_client
