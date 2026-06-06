@@ -350,15 +350,23 @@ class TradingBot:
                     self.log(f"Skipping (price >= {max_cents}¢): {question_short}", "SCAN")
                     continue
 
+                if not check_price >= target_price:
+                    continue
+
+                from city_timezones import extract_city_from_question, get_city_utc_offset, is_after_3pm_local
+                city = extract_city_from_question(question)
+                if city:
+                    offset = get_city_utc_offset(city)
+                    if offset is not None and not is_after_3pm_local(offset):
+                        self.log(f"Skipping (before 3PM local): {city} | {question_short}", "SCAN")
+                        continue
+
                 base_key = re.sub(r'\s+between\s+\d+[-–]?\d*°[CF]', '', question)
                 base_key = re.sub(r'\s+\d+[-–]?\d*°[CF]', '', base_key)
                 base_key = re.sub(r'\s+', ' ', base_key).strip()
 
                 if base_key in base_traded:
                     self.log(f"Skipping (same city/date already traded): {question_short}", "SCAN")
-                    continue
-
-                if not check_price >= target_price:
                     continue
 
                 token_id = self._get_token_id(market, trade_side)
