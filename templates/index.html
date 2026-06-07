@@ -240,15 +240,22 @@
         let isDryRun = true;
         let targetDate = 'all';
 
+        function localDateStr(d) {
+            const y = d.getFullYear();
+            const m = String(d.getMonth()+1).padStart(2,'0');
+            const day = String(d.getDate()).padStart(2,'0');
+            return `${y}-${m}-${day}`;
+        }
+
         function setDate(d) {
             targetDate = d;
             document.querySelectorAll('.date-btn').forEach(b => b.classList.remove('active'));
             if (d === 'all') document.getElementById('dateAll').classList.add('active');
             else {
                 const today = new Date();
-                const td = today.toISOString().split('T')[0];
-                const tm = new Date(today); tm.setDate(tm.getDate()+1); const tmd = tm.toISOString().split('T')[0];
-                const da = new Date(today); da.setDate(da.getDate()+2); const dad = da.toISOString().split('T')[0];
+                const td = localDateStr(today);
+                const tm = new Date(today); tm.setDate(tm.getDate()+1); const tmd = localDateStr(tm);
+                const da = new Date(today); da.setDate(da.getDate()+2); const dad = localDateStr(da);
                 if (d === td) document.getElementById('dateToday').classList.add('active');
                 else if (d === tmd) document.getElementById('dateTomorrow').classList.add('active');
                 else if (d === dad) document.getElementById('dateDayAfter').classList.add('active');
@@ -260,7 +267,7 @@
         function setQuickDate(offset) {
             const d = new Date();
             d.setDate(d.getDate() + offset);
-            setDate(d.toISOString().split('T')[0]);
+            setDate(localDateStr(d));
         }
 
         function setMode(dry) {
