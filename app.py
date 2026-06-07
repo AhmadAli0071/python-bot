@@ -147,6 +147,14 @@ def get_categories():
     })
 
 
+@app.route("/api/trades/clear", methods=["POST"])
+def clear_trades():
+    import os
+    if os.path.exists("traded_markets.json"):
+        os.remove("traded_markets.json")
+    return jsonify({"ok": True})
+
+
 @app.route("/api/setup", methods=["POST"])
 def setup_keys():
     creds, err = bot.setup_api_keys()
