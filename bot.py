@@ -19,6 +19,11 @@ CHAIN_ID = int(os.getenv("CHAIN_ID", "137"))
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_HOST = "https://clob.polymarket.com"
 
+MAX_TRADES_PER_SCAN = 20
+MAX_RETRIES = 3
+REQUEST_TIMEOUT = 15
+STUCK_THRESHOLD = 600
+
 CATEGORIES = {
     "All": None,
     "Weather": "84",
@@ -53,12 +58,14 @@ class TradingBot:
         self.running = False
         self.thread = None
         self.logs = []
-        self.max_logs = 200
+        self.max_logs = 300
         self.scanning = False
         self.last_scan_time = None
         self.last_scan_count = 0
         self.last_trade_count = 0
         self._clob_client = None
+        self.last_activity = time.time()
+        self._lock = threading.Lock()
 
     def log(self, msg, level="INFO"):
         entry = {
@@ -66,9 +73,10 @@ class TradingBot:
             "level": level,
             "message": msg,
         }
-        self.logs.insert(0, entry)
-        if len(self.logs) > self.max_logs:
-            self.logs = self.logs[: self.max_logs]
+        with self._lock:
+            self.logs.insert(0, entry)
+            if len(self.logs) > self.max_logs:
+                self.logs = self.logs[: self.max_logs]
         print(f"[{entry['time']}] [{level}] {msg}")
 
     def _get_clob_client(self):
@@ -121,21 +129,28 @@ class TradingBot:
         return clob_token_ids[1]
 
     def _fetch_markets(self, tag_id=None, limit=100, offset=0):
-        try:
-            params = {
-                "active": "true",
-                "closed": "false",
-                "limit": limit,
-                "offset": offset,
-            }
-            if tag_id:
-                params["tag_id"] = tag_id
-            resp = requests.get(f"{GAMMA_API}/markets", params=params, timeout=30)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            self.log(f"API error: {e}", "ERROR")
-            return []
+        for attempt in range(MAX_RETRIES):
+            try:
+                params = {
+                    "active": "true",
+                    "closed": "false",
+                    "limit": limit,
+                    "offset": offset,
+                }
+                if tag_id:
+                    params["tag_id"] = tag_id
+                resp = requests.get(f"{GAMMA_API}/markets", params=params, timeout=REQUEST_TIMEOUT)
+                resp.raise_for_status()
+                return resp.json()
+            except requests.exceptions.Timeout:
+                self.log(f"API timeout (attempt {attempt+1}/{MAX_RETRIES})", "WARN")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(2 * (attempt + 1))
+            except Exception as e:
+                self.log(f"API error: {e}", "ERROR")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(2 * (attempt + 1))
+        return []
 
     def _filter_markets(self, markets, weather_sub=None, target_date=None):
         filtered = []
@@ -202,6 +217,14 @@ class TradingBot:
                 self.log(f"Price is 0, skip: {question}", "WARN")
                 return False
 
+            if trade_price > 0.99:
+                self.log(f"Price too high ({trade_price}), skip: {question[:50]}", "WARN")
+                return False
+
+            if amount_usdt <= 0:
+                self.log(f"Invalid amount ({amount_usdt}), skip: {question[:50]}", "WARN")
+                return False
+
             size = amount_usdt / trade_price
             event_date = self._extract_event_date(question)
 
@@ -233,8 +256,9 @@ class TradingBot:
             neg_risk = market.get("neg_risk", False)
 
             self.log(
-                f"Placing {side} order: {question[:60]}... | "
-                f"Price: ${trade_price:.2f} | Size: {size:.2f} | Cost: ~${amount_usdt:.2f}"
+                f"LIVE TRADE: Placing {side} order: {question[:60]}... | "
+                f"Price: ${trade_price:.2f} | Size: {size:.2f} | Cost: ~${amount_usdt:.2f}",
+                "TRADE"
             )
 
             from py_clob_client_v2 import OrderArgs, OrderType, PartialCreateOrderOptions
@@ -256,7 +280,7 @@ class TradingBot:
 
             order_id = response.get("orderID", "N/A")
             status = response.get("status", "N/A")
-            self.log(f"Order placed! ID: {order_id} | Status: {status}", "TRADE")
+            self.log(f"Order CONFIRMED! ID: {order_id} | Status: {status}", "TRADE")
 
             from config import save_trade
 
@@ -278,13 +302,14 @@ class TradingBot:
             return True
 
         except Exception as e:
-            self.log(f"Trade failed: {e}", "ERROR")
+            self.log(f"Trade FAILED: {e}", "ERROR")
             return False
 
     def _scan_once(self, target_cents, trade_side, amount_usdt, category="All", weather_sub="All Weather", dry_run=True, target_date="all", max_cents=98):
         from config import load_trades
 
         self.scanning = True
+        self.last_activity = time.time()
         target_price = target_cents / 100.0
         max_price = max_cents / 100.0
         cat_info = f" | Category: {category}"
@@ -294,104 +319,122 @@ class TradingBot:
             cat_info += f" > {weather_sub}"
         self.log(f"Scan started | Side: {trade_side} | Price: {target_cents}-{max_cents} cents (${target_price:.2f}-${max_price:.2f}){cat_info}{date_info}{mode_info}")
 
-        traded = load_trades()
-        traded_ids = {t.get("condition_id") for t in traded}
+        try:
+            traded = load_trades()
+            traded_ids = {t.get("condition_id") for t in traded}
 
-        if dry_run:
-            client = None
-        else:
-            client = self._get_clob_client()
-            if not client:
-                self.log("No CLOB client, aborting scan", "ERROR")
-                self.scanning = False
-                return 0, 0
+            if not dry_run:
+                client = self._get_clob_client()
+                if not client:
+                    self.log("No CLOB client, aborting scan", "ERROR")
+                    self.scanning = False
+                    return 0, 0
+            else:
+                client = None
 
-        tag_id = CATEGORIES.get(category)
-        offset = 0
-        total = 0
-        trades = 0
-        base_traded = set()
+            tag_id = CATEGORIES.get(category)
+            page_offset = 0
+            total = 0
+            trades = 0
+            base_traded = set()
 
-        while self.running:
-            markets = self._fetch_markets(tag_id=tag_id, limit=100, offset=offset)
-            if not markets:
-                break
-            self.log(f"Fetched {len(markets)} markets from API (offset {offset})", "SCAN")
-
-            sub = weather_sub if category == "Weather" else None
-            filtered = self._filter_markets(markets, weather_sub=sub, target_date=target_date)
-            self.log(f"After filter: {len(filtered)} / {len(markets)} markets (sub={weather_sub}, date={target_date})", "SCAN")
-
-            for market in filtered:
-                if not self.running:
+            while self.running:
+                markets = self._fetch_markets(tag_id=tag_id, limit=100, offset=page_offset)
+                self.last_activity = time.time()
+                if not markets:
                     break
+                self.log(f"Fetched {len(markets)} markets (page {page_offset // 100 + 1})", "SCAN")
 
-                total += 1
-                condition_id = market.get("conditionId", "")
-                question = market.get("question", "?")
-                question_short = question[:50]
+                if len(markets) < 100:
+                    pass
 
-                if condition_id in traded_ids:
-                    self.log(f"Skipping (already traded): {question_short}", "SCAN")
-                    continue
+                sub = weather_sub if category == "Weather" else None
+                filtered = self._filter_markets(markets, weather_sub=sub, target_date=target_date)
+                self.log(f"After filter: {len(filtered)} / {len(markets)} markets", "SCAN")
 
-                if not market.get("enableOrderBook", False):
-                    self.log(f"Skipping (no orderbook): {question_short}", "SCAN")
-                    continue
+                for market in filtered:
+                    if not self.running:
+                        break
 
-                yes_price, no_price = self._get_token_prices(market)
-                if yes_price is None:
-                    self.log(f"Skipping (no prices): {question_short}", "SCAN")
-                    continue
+                    if trades >= MAX_TRADES_PER_SCAN:
+                        self.log(f"Max trades per scan reached ({MAX_TRADES_PER_SCAN}), stopping", "WARN")
+                        break
 
-                check_price = no_price if trade_side == "NO" else yes_price
-                self.log(f"Checked: {question_short} | YES=${yes_price:.2f} NO=${no_price:.2f} | {trade_side} price=${check_price:.2f} vs target=${target_price:.2f}", "SCAN")
+                    total += 1
+                    self.last_activity = time.time()
+                    condition_id = market.get("conditionId", "")
+                    question = market.get("question", "?")
+                    question_short = question[:50]
 
-                if check_price >= max_price:
-                    self.log(f"Skipping (price >= {max_cents}¢): {question_short}", "SCAN")
-                    continue
-
-                if not check_price >= target_price:
-                    continue
-
-                from city_timezones import extract_city_from_question, get_city_utc_offset, is_after_3pm_local
-                city = extract_city_from_question(question)
-                if city:
-                    offset = get_city_utc_offset(city)
-                    if offset is not None and not is_after_3pm_local(offset):
-                        self.log(f"Skipping (before 3PM local): {city} | {question_short}", "SCAN")
+                    if condition_id in traded_ids:
                         continue
 
-                base_key = re.sub(r'\s+between\s+\d+[-–]?\d*°[CF]', '', question)
-                base_key = re.sub(r'\s+\d+[-–]?\d*°[CF]', '', base_key)
-                base_key = re.sub(r'\s+', ' ', base_key).strip()
+                    if not market.get("enableOrderBook", False):
+                        continue
 
-                if base_key in base_traded:
-                    self.log(f"Skipping (same city/date already traded): {question_short}", "SCAN")
-                    continue
+                    yes_price, no_price = self._get_token_prices(market)
+                    if yes_price is None:
+                        continue
 
-                token_id = self._get_token_id(market, trade_side)
-                if not token_id:
-                    continue
+                    check_price = no_price if trade_side == "NO" else yes_price
 
-                base_traded.add(base_key)
-                self.log(
-                    f"FOUND: {question[:80]}... | YES: ${yes_price:.2f} | NO: ${no_price:.2f}",
-                    "MATCH",
-                )
+                    if check_price >= max_price:
+                        continue
 
-                ok = self._place_trade(
-                    client, market, token_id, check_price, trade_side, amount_usdt, dry_run
-                )
-                if ok:
-                    traded_ids.add(condition_id)
-                    trades += 1
+                    if not check_price >= target_price:
+                        continue
 
-            offset += 100
+                    try:
+                        from city_timezones import extract_city_from_question, get_city_utc_offset, is_after_3pm_local
+                        city = extract_city_from_question(question)
+                        if city:
+                            city_offset = get_city_utc_offset(city)
+                            if city_offset is not None and not is_after_3pm_local(city_offset):
+                                self.log(f"Skipping (before 3PM local): {city} | {question_short}", "SCAN")
+                                continue
+                    except Exception as e:
+                        self.log(f"Timezone check failed: {e}", "WARN")
 
-        self.scanning = False
-        self.log(f"Scan done | Markets: {total} | Trades: {trades}")
-        return total, trades
+                    base_key = re.sub(r'\s+between\s+\d+[-–]?\d*°[CF]', '', question)
+                    base_key = re.sub(r'\s+\d+[-–]?\d*°[CF]', '', base_key)
+                    base_key = re.sub(r'\s+', ' ', base_key).strip()
+
+                    if base_key in base_traded:
+                        continue
+
+                    token_id = self._get_token_id(market, trade_side)
+                    if not token_id:
+                        continue
+
+                    base_traded.add(base_key)
+                    self.log(
+                        f"MATCH: {question[:80]}... | YES: ${yes_price:.2f} | NO: ${no_price:.2f} | {trade_side}: ${check_price:.2f}",
+                        "MATCH",
+                    )
+
+                    ok = self._place_trade(
+                        client, market, token_id, check_price, trade_side, amount_usdt, dry_run
+                    )
+                    if ok:
+                        traded_ids.add(condition_id)
+                        trades += 1
+
+                if trades >= MAX_TRADES_PER_SCAN:
+                    break
+
+                if len(markets) < 100:
+                    break
+
+                page_offset += 100
+
+            self.log(f"Scan done | Markets: {total} | Trades: {trades}")
+            return total, trades
+
+        except Exception as e:
+            self.log(f"Scan CRASHED: {e}", "ERROR")
+            return total if 'total' in dir() else 0, trades if 'trades' in dir() else 0
+        finally:
+            self.scanning = False
 
     def _bot_loop(self):
         from config import load_config
@@ -404,42 +447,70 @@ class TradingBot:
             return
 
         while self.running:
-            cfg = load_config()
-            target_cents = cfg.get("target_price_cents", 97)
-            max_cents = cfg.get("max_price_cents", 98)
-            trade_side = cfg.get("trade_side", "NO")
-            amount_usdt = cfg.get("trade_amount_usdt", 5.0)
-            interval = cfg.get("scan_interval_seconds", 60)
-            category = cfg.get("selected_category", "All")
-            weather_sub = cfg.get("weather_subcategory", "All Weather")
-            dry_run = cfg.get("dry_run", True)
-            target_date = cfg.get("target_date", "all")
+            try:
+                cfg = load_config()
+                target_cents = cfg.get("target_price_cents", 97)
+                max_cents = cfg.get("max_price_cents", 98)
+                trade_side = cfg.get("trade_side", "NO")
+                amount_usdt = cfg.get("trade_amount_usdt", 5.0)
+                interval = cfg.get("scan_interval_seconds", 60)
+                category = cfg.get("selected_category", "All")
+                weather_sub = cfg.get("weather_subcategory", "All Weather")
+                dry_run = cfg.get("dry_run", True)
+                target_date = cfg.get("target_date", "all")
 
-            total, trades = self._scan_once(target_cents, trade_side, amount_usdt, category, weather_sub, dry_run, target_date, max_cents)
-            self.last_scan_time = datetime.now().strftime("%H:%M:%S")
-            self.last_scan_count = total
-            self.last_trade_count = trades
+                total, trades = self._scan_once(target_cents, trade_side, amount_usdt, category, weather_sub, dry_run, target_date, max_cents)
+                self.last_scan_time = datetime.now().strftime("%H:%M:%S")
+                self.last_scan_count = total
+                self.last_trade_count = trades
+                self.last_activity = time.time()
 
-            for _ in range(interval):
-                if not self.running:
-                    break
-                time.sleep(1)
+                for _ in range(interval):
+                    if not self.running:
+                        break
+                    time.sleep(1)
+
+            except Exception as e:
+                self.log(f"Bot loop error (auto-restarting): {e}", "ERROR")
+                self.scanning = False
+                time.sleep(10)
 
         self.log("Bot thread stopped")
+
+    def _watchdog(self):
+        while True:
+            time.sleep(120)
+            if self.running and self.last_activity:
+                elapsed = time.time() - self.last_activity
+                if elapsed > STUCK_THRESHOLD:
+                    self.log(f"WATCHDOG: Bot stuck for {int(elapsed)}s, forcing restart", "ERROR")
+                    self.running = False
+                    self.scanning = False
+                    time.sleep(3)
+                    self.running = True
+                    self._clob_client = None
+                    self.thread = threading.Thread(target=self._bot_loop, daemon=True)
+                    self.thread.start()
+                    self.log("WATCHDOG: Bot restarted", "INFO")
 
     def start(self):
         if self.running:
             return False
         self.running = True
         self._clob_client = None
+        self.last_activity = time.time()
         self.thread = threading.Thread(target=self._bot_loop, daemon=True)
         self.thread.start()
+        if not hasattr(self, '_watchdog_thread') or self._watchdog_thread is None or not self._watchdog_thread.is_alive():
+            self._watchdog_thread = threading.Thread(target=self._watchdog, daemon=True)
+            self._watchdog_thread.start()
         return True
 
     def stop(self):
         if not self.running:
             return False
         self.running = False
+        self.scanning = False
         if self.thread:
             self.thread.join(timeout=10)
             self.thread = None
@@ -455,7 +526,8 @@ class TradingBot:
         }
 
     def get_logs(self, count=50):
-        return self.logs[:count]
+        with self._lock:
+            return self.logs[:count]
 
     @staticmethod
     def setup_api_keys():
